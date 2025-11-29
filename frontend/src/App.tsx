@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import axios from 'axios'
 import './App.css'
+import GraphViz from './components/GraphViz'
 
 interface GraphData {
   is_planar: boolean
@@ -100,20 +101,31 @@ function App() {
               })}
             </div>
 
+
             <div className="result-content">
               {results[activeTab] && (
-                <div>
+                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   {results[activeTab].status === 'success' ? (
                     <>
-                      <div className={`status-badge ${results[activeTab].data?.is_planar ? 'status-planar' : 'status-non-planar'}`}>
-                        {results[activeTab].data?.is_planar ? 'PLANAR' : 'NON-PLANAR'}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                        <div className={`status-badge ${results[activeTab].data?.is_planar ? 'status-planar' : 'status-non-planar'}`}>
+                          {results[activeTab].data?.is_planar ? 'PLANAR' : 'NON-PLANAR'}
+                        </div>
+                        <div style={{ fontSize: '0.9em', color: '#aaa' }}>
+                          Nodes: {results[activeTab].data?.nodes.length} | Edges: {results[activeTab].data?.edges.length}
+                        </div>
                       </div>
-                      <div>
-                        <strong>Nodes:</strong> {results[activeTab].data?.nodes.length}<br />
-                        <strong>Edges:</strong> {results[activeTab].data?.edges.length}
+
+                      <div style={{ flex: 1, minHeight: 0 }}>
+                        {results[activeTab].data && (
+                          <GraphViz
+                            nodes={results[activeTab].data.nodes}
+                            edges={results[activeTab].data.edges}
+                            width={800}
+                            height={600}
+                          />
+                        )}
                       </div>
-                      <hr style={{ borderColor: '#444', margin: '10px 0' }} />
-                      <pre>{JSON.stringify(results[activeTab].data, null, 2)}</pre>
                     </>
                   ) : (
                     <>
