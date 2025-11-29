@@ -121,3 +121,32 @@ async def process_batch(inputs: List[str] = Body(...)):
             yield await coro
 
     return StreamingResponse(result_generator(), media_type="application/x-ndjson")
+
+# Drug Discovery Endpoint
+from app.drug_discovery import analyze_molecule, generate_llm_response
+from pydantic import BaseModel
+
+class DrugDiscoveryRequest(BaseModel):
+    smiles: str = None
+    message: str
+
+@app.post("/drug-discovery/chat")
+async def drug_discovery_chat(request: DrugDiscoveryRequest):
+    """
+    Analyzes a molecule and provides an LLM response.
+    Handles high concurrency by offloading CPU tasks to executor.
+    """
+    loop = asyncio.get_running_loop()
+    
+    analysis = None
+    if request.smiles and request.smiles.strip():
+        # 1. Analyze molecule (CPU bound) -> Offload to ProcessPoolExecutor
+        analysis = await loop.run_in_executor(executor, analyze_molecule, request.smiles)
+    
+    # 2. Generate LLM response (I/O bound) -> Async await
+    llm_response = await generate_llm_response(analysis, request.message)
+    
+    return {
+        "analysis": analysis,
+        "response": llm_response
+    }

@@ -284,7 +284,11 @@ const Home: React.FC = () => {
                                         <span className={`status-badge ${results[activeTab]?.data?.is_planar ? 'status-planar' : 'status-non-planar'}`}>
                                             {results[activeTab]?.data?.is_planar ? 'PLANAR' : 'NON-PLANAR'}
                                         </span>
-
+                                        {!results[activeTab]?.data?.is_planar && (
+                                            <span style={{ marginLeft: '10px', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                                (K5: {results[activeTab]?.data?.k5_count}, K3,3: {results[activeTab]?.data?.k33_count})
+                                            </span>
+                                        )}
                                     </div>
                                     <button
                                         className="btn-secondary"
