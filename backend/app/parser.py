@@ -13,8 +13,19 @@ class GraphParser:
         if input_str.startswith("{"):
             try:
                 data = json.loads(input_str)
+                # Check for "nodes" and "edges" format
+                if "nodes" in data and "edges" in data:
+                    g = nx.Graph()
+                    for node in data["nodes"]:
+                        # Add node with attributes (x, y, etc.)
+                        g.add_node(node["id"], **node)
+                    for edge in data["edges"]:
+                        g.add_edge(edge["source"], edge["target"])
+                    return g
+                
+                # Fallback to standard node_link_graph
                 return nx.node_link_graph(data)
-            except (json.JSONDecodeError, nx.NetworkXError):
+            except (json.JSONDecodeError, nx.NetworkXError, KeyError):
                 pass # Fallthrough
 
         # 2. Adjacency Matrix Detection
