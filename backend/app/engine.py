@@ -12,25 +12,16 @@ def analyze_graph(G: nx.Graph) -> dict:
         # certificate is the counterexample subgraph (Kuratowski subgraph)
         for u, v in certificate.edges():
             conflict_edges.add(tuple(sorted((u, v))))
-    
-    # Determine layout
-    # 1. Check if graph already has coordinates (from input JSON)
-    has_coords = all('x' in G.nodes[n] and 'y' in G.nodes[n] for n in G.nodes())
-    
-    if has_coords:
-        # Use existing coordinates
-        pos = {n: (G.nodes[n]['x'], G.nodes[n]['y']) for n in G.nodes()}
+        # Use spring layout for non-planar graphs
+        pos = nx.spring_layout(G, seed=42)
     else:
-        # 2. Generate layout
-        if not is_planar:
-            # Use spring layout for non-planar graphs
+        # Use planar layout for planar graphs
+        try:
+            pos = nx.planar_layout(G)
+        except nx.NetworkXException:
+            # Fallback if planar_layout fails for some reason (e.g. disconnected components sometimes behave oddly if not handled)
+            # But planar_layout should handle disconnected graphs by laying out components.
             pos = nx.spring_layout(G, seed=42)
-        else:
-            # Use planar layout for planar graphs
-            try:
-                pos = nx.planar_layout(G)
-            except nx.NetworkXException:
-                pos = nx.spring_layout(G, seed=42)
 
     nodes = []
     for node in G.nodes():
