@@ -3,6 +3,7 @@ import Navbar from './components/Navbar'
 import Home from './pages/Home'
 import API from './pages/API'
 import Docs from './pages/Docs'
+import MiniDoc from './pages/MiniDoc'
 import About from './pages/About'
 import DrugDiscovery from './pages/DrugDiscovery'
 import StarBackground from './components/StarBackground'
@@ -20,6 +21,7 @@ function App() {
             <Route path="/" element={<Home />} />
             <Route path="/api" element={<API />} />
             <Route path="/docs" element={<Docs />} />
+            <Route path="/mini-doc" element={<MiniDoc />} />
             <Route path="/about" element={<About />} />
             <Route path="/drug-discovery" element={<DrugDiscovery />} />
           </Routes>
