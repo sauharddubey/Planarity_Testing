@@ -65,9 +65,9 @@ const GraphViz: React.FC<GraphVizProps> = ({ nodes: initialNodes, edges: initial
         }
     }, []);
 
-    // --- 2D D3 Logic (Only for Non-Planar) ---
+    // --- 2D D3 Logic (Only for Planar) ---
     useEffect(() => {
-        if (isPlanar || !svgRef.current || !containerRef.current) return;
+        if (!isPlanar || !svgRef.current || !containerRef.current) return;
 
         const width = containerRef.current.clientWidth;
         const height = containerRef.current.clientHeight;
@@ -236,9 +236,9 @@ const GraphViz: React.FC<GraphVizProps> = ({ nodes: initialNodes, edges: initial
                         return "#f43f5e"; // Non-Planar Red
                     }}
                     nodeRelSize={6}
-                    linkColor={() => "#64748b"}
-                    linkWidth={1.5}
-                    linkOpacity={0.6}
+                    linkColor={(link: any) => link.is_conflict ? "#ef4444" : "#64748b"}
+                    linkWidth={(link: any) => link.is_conflict ? 3 : 1}
+                    linkOpacity={(link: any) => link.is_conflict ? 1 : 0.3}
                 />
 
                 {/* 3D Overlay */}
