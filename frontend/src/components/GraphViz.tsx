@@ -133,7 +133,13 @@ const GraphViz: React.FC<GraphVizProps> = ({ nodes: initialNodes, edges: initial
                 );
 
                 if (isBad) return "#f87171"; // Light Red
-                return "#3b82f6"; // Blue
+
+                // CPK Coloring
+                if (d.label && CPK_COLORS[d.label]) {
+                    return CPK_COLORS[d.label];
+                }
+
+                return "#10b981"; // Planar Green (Default)
             })
             .attr("stroke", "#1e293b")
             .attr("stroke-width", 1.5)
@@ -299,6 +305,16 @@ const GraphViz: React.FC<GraphVizProps> = ({ nodes: initialNodes, edges: initial
                 <div className="legend-item">
                     <span className="legend-dot bg-slate"></span> Edge
                 </div>
+                {initialNodes.some(n => n.label === 'O') && (
+                    <div className="legend-item">
+                        <span className="legend-dot" style={{ background: '#FF0D0D' }}></span> Oxygen
+                    </div>
+                )}
+                {initialNodes.some(n => n.label === 'N') && (
+                    <div className="legend-item">
+                        <span className="legend-dot" style={{ background: '#3050F8' }}></span> Nitrogen
+                    </div>
+                )}
             </div>
         </div>
     );
