@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import GraphViz from '../components/GraphViz';
 import FileUploader from '../components/FileUploader';
+import DrugDiscoveryChat from '../components/DrugDiscoveryChat';
 
 interface Result {
     status: 'success' | 'error'
@@ -30,6 +31,7 @@ const Home: React.FC = () => {
     const [results, setResults] = useState<(Result | null)[]>([]);
     const [activeTab, setActiveTab] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [mode, setMode] = useState<'graph' | 'drug'>('graph');
     const dashboardRef = useRef<HTMLDivElement>(null);
 
     // Load from localStorage on mount
@@ -213,25 +215,72 @@ const Home: React.FC = () => {
                     transition={{ duration: 0.6 }}
                 >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                        <h2 style={{ margin: 0 }}>Input Graphs</h2>
-                        <button className="btn-secondary" onClick={addInputCard} title="Add new graph">+</button>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button
+                                className={`btn-mode ${mode === 'graph' ? 'active' : ''}`}
+                                onClick={() => setMode('graph')}
+                                style={{
+                                    padding: '8px 16px',
+                                    borderRadius: '8px',
+                                    background: mode === 'graph' ? 'var(--accent-primary)' : 'transparent',
+                                    border: '1px solid var(--accent-primary)',
+                                    color: '#fff',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Graph Analysis
+                            </button>
+                            <button
+                                className={`btn-mode ${mode === 'drug' ? 'active' : ''}`}
+                                onClick={() => setMode('drug')}
+                                style={{
+                                    padding: '8px 16px',
+                                    borderRadius: '8px',
+                                    background: mode === 'drug' ? 'var(--accent-primary)' : 'transparent',
+                                    border: '1px solid var(--accent-primary)',
+                                    color: '#fff',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Drug Discovery 💊
+                            </button>
+                        </div>
                     </div>
 
-                    <div style={{ marginBottom: '20px' }}>
-                        <FileUploader onFilesLoaded={(files: { name: string; content: string }[]) => {
-                            const newInputs: string[] = [];
-                            files.forEach(file => {
-                                try {
-                                    const parsed = JSON.parse(file.content);
-                                    if (Array.isArray(parsed)) {
-                                        // Array of graphs
-                                        parsed.forEach(item => {
-                                            if (typeof item === 'string') newInputs.push(item);
-                                            else if (typeof item === 'object' && item.edges) {
-                                                // Handle object with edges property
-                                                if (Array.isArray(item.edges)) {
-                                                    // Convert edge list array to string
-                                                    const edgeString = item.edges.map((e: any) => {
+                    {mode === 'graph' ? (
+                        <>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                <h2 style={{ margin: 0 }}>Input Graphs</h2>
+                                <button className="btn-secondary" onClick={addInputCard} title="Add new graph">+</button>
+                            </div>
+
+                            <div style={{ marginBottom: '20px' }}>
+                                <FileUploader onFilesLoaded={(files: { name: string; content: string }[]) => {
+                                    const newInputs: string[] = [];
+                                    files.forEach(file => {
+                                        try {
+                                            const parsed = JSON.parse(file.content);
+                                            if (Array.isArray(parsed)) {
+                                                // Array of graphs
+                                                parsed.forEach(item => {
+                                                    if (typeof item === 'string') newInputs.push(item);
+                                                    else if (typeof item === 'object' && item.edges) {
+                                                        // Handle object with edges property
+                                                        if (Array.isArray(item.edges)) {
+                                                            // Convert edge list array to string
+                                                            const edgeString = item.edges.map((e: any) => {
+                                                                if (Array.isArray(e)) return `${e[0]} ${e[1]}`;
+                                                                if (typeof e === 'object') return `${e.source} ${e.target}`;
+                                                                return String(e);
+                                                            }).join('\n');
+                                                            newInputs.push(edgeString);
+                                                        }
+                                                    }
+                                                });
+                                            } else if (typeof parsed === 'object' && parsed.edges) {
+                                                // Single graph object
+                                                if (Array.isArray(parsed.edges)) {
+                                                    const edgeString = parsed.edges.map((e: any) => {
                                                         if (Array.isArray(e)) return `${e[0]} ${e[1]}`;
                                                         if (typeof e === 'object') return `${e.source} ${e.target}`;
                                                         return String(e);
@@ -239,177 +288,183 @@ const Home: React.FC = () => {
                                                     newInputs.push(edgeString);
                                                 }
                                             }
-                                        });
-                                    } else if (typeof parsed === 'object' && parsed.edges) {
-                                        // Single graph object
-                                        if (Array.isArray(parsed.edges)) {
-                                            const edgeString = parsed.edges.map((e: any) => {
-                                                if (Array.isArray(e)) return `${e[0]} ${e[1]}`;
-                                                if (typeof e === 'object') return `${e.source} ${e.target}`;
-                                                return String(e);
-                                            }).join('\n');
-                                            newInputs.push(edgeString);
+                                        } catch (e) {
+                                            // Not JSON, treat as raw text
+                                            if (file.content.trim()) {
+                                                newInputs.push(file.content);
+                                            }
                                         }
+                                    });
+
+                                    if (newInputs.length > 0) {
+                                        setInputs(prev => {
+                                            // Filter out empty initial input if it exists
+                                            const filteredPrev = prev.length === 1 && !prev[0].trim() ? [] : prev;
+                                            return [...filteredPrev, ...newInputs];
+                                        });
+                                        setResults(prev => {
+                                            const filteredPrev = prev.length === 1 && !inputs[0].trim() ? [] : prev;
+                                            return [...filteredPrev, ...new Array(newInputs.length).fill(null)];
+                                        });
+                                        setActiveTab(prev => {
+                                            const filteredPrevLen = inputs.length === 1 && !inputs[0].trim() ? 0 : inputs.length;
+                                            return filteredPrevLen; // Switch to first new tab
+                                        });
                                     }
-                                } catch (e) {
-                                    // Not JSON, treat as raw text
-                                    if (file.content.trim()) {
-                                        newInputs.push(file.content);
-                                    }
-                                }
-                            });
+                                }} />
+                            </div>
 
-                            if (newInputs.length > 0) {
-                                setInputs(prev => {
-                                    // Filter out empty initial input if it exists
-                                    const filteredPrev = prev.length === 1 && !prev[0].trim() ? [] : prev;
-                                    return [...filteredPrev, ...newInputs];
-                                });
-                                setResults(prev => {
-                                    const filteredPrev = prev.length === 1 && !inputs[0].trim() ? [] : prev;
-                                    return [...filteredPrev, ...new Array(newInputs.length).fill(null)];
-                                });
-                                setActiveTab(prev => {
-                                    const filteredPrevLen = inputs.length === 1 && !inputs[0].trim() ? 0 : inputs.length;
-                                    return filteredPrevLen; // Switch to first new tab
-                                });
-                            }
-                        }} />
-                    </div>
+                            <div className="tabs">
+                                {inputs.map((_, idx) => {
+                                    const result = results[idx];
+                                    const isError = result?.status === 'error';
+                                    const isPlanar = result?.status === 'success' && result?.data?.is_planar;
+                                    // eslint-disable-next-line no-nested-ternary
+                                    const tabClass = `tab ${activeTab === idx ? 'active' : ''} ${isError ? 'error' : (isPlanar ? 'planar' : (result ? 'non-planar' : ''))}`;
 
-                    <div className="tabs">
-                        {inputs.map((_, idx) => {
-                            const result = results[idx];
-                            const isError = result?.status === 'error';
-                            const isPlanar = result?.status === 'success' && result?.data?.is_planar;
-                            // eslint-disable-next-line no-nested-ternary
-                            const tabClass = `tab ${activeTab === idx ? 'active' : ''} ${isError ? 'error' : (isPlanar ? 'planar' : (result ? 'non-planar' : ''))}`;
-
-                            return (
-                                <div
-                                    key={idx}
-                                    className={tabClass}
-                                    onClick={() => setActiveTab(idx)}
-                                >
-                                    Graph {idx + 1} {isError ? '⚠️' : (isPlanar ? '✅' : (result ? '❌' : ''))}
-                                    {inputs.length > 1 && (
-                                        <span className="btn-remove" style={{ marginLeft: '8px' }} onClick={(e) => removeInputCard(idx, e)}>×</span>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-
-                    <div className="input-card">
-                        <textarea
-                            className="input-textarea"
-                            value={inputs[activeTab]}
-                            onChange={(e) => handleInputChange(activeTab, e.target.value)}
-                            placeholder="Enter edges (e.g., '0 1\n1 2') or SMILES string..."
-                        />
-                        <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
-                            {Object.keys(PRESETS).map((preset) => (
-                                <button
-                                    key={preset}
-                                    className="btn-preset"
-                                    onClick={() => loadPreset(activeTab, preset as keyof typeof PRESETS)}
-                                >
-                                    {preset}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div style={{ marginTop: 'auto', paddingTop: '20px' }}>
-                        <button
-                            className="btn-primary"
-                            style={{ width: '100%' }}
-                            onClick={processBatch}
-                            disabled={isProcessing}
-                        >
-                            {isProcessing ? 'Processing...' : 'Analyze All Graphs'}
-                        </button>
-                    </div>
-                </motion.div>
-
-                <motion.div
-                    className="right-panel"
-                    initial={{ opacity: 0, x: 50 }}
-                    whileInView={{ opacity: 1, x: 0 }}
-                    viewport={{ once: true }}
-                    transition={{ duration: 0.6, delay: 0.2 }}
-                >
-                    {results[activeTab] ? (
-                        results[activeTab]?.status === 'success' ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                                    <div>
-                                        <span className={`status-badge ${results[activeTab]?.data?.is_planar ? 'status-planar' : 'status-non-planar'}`}>
-                                            {results[activeTab]?.data?.is_planar ? 'PLANAR' : 'NON-PLANAR'}
-                                        </span>
-                                        {!results[activeTab]?.data?.is_planar && (
-                                            <span style={{ marginLeft: '10px', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
-                                                (K5: {results[activeTab]?.data?.k5_count}, K3,3: {results[activeTab]?.data?.k33_count})
-                                            </span>
-                                        )}
-                                        <div style={{ fontSize: '0.8em', color: 'var(--text-tertiary)', marginTop: '4px' }}>
-                                            Time: {results[activeTab]?.data?.execution_time?.toFixed(4)}s | Source: {results[activeTab]?.data?.result_source || 'Unknown'}
+                                    return (
+                                        <div
+                                            key={idx}
+                                            className={tabClass}
+                                            onClick={() => setActiveTab(idx)}
+                                        >
+                                            Graph {idx + 1} {isError ? '⚠️' : (isPlanar ? '✅' : (result ? '❌' : ''))}
+                                            {inputs.length > 1 && (
+                                                <span className="btn-remove" style={{ marginLeft: '8px' }} onClick={(e) => removeInputCard(idx, e)}>×</span>
+                                            )}
                                         </div>
-                                    </div>
-                                    <button
-                                        className="btn-secondary"
-                                        style={{ fontSize: '0.9rem', padding: '6px 12px' }}
-                                        onClick={() => {
-                                            const data = results[activeTab]?.data;
-                                            if (!data) return;
-                                            // @ts-ignore
-                                            const cert = data.certificate || { error: "Certificate not found" };
-                                            if (data.execution_time !== undefined) {
-                                                // @ts-ignore
-                                                cert.execution_time = data.execution_time;
-                                                // @ts-ignore
-                                                cert.execution_time_unit = "seconds";
-                                            }
-                                            if (data.result_source) {
-                                                // @ts-ignore
-                                                cert.result_source = data.result_source;
-                                            }
-                                            const blob = new Blob([JSON.stringify(cert, null, 2)], { type: 'application/json' });
-                                            const url = URL.createObjectURL(blob);
-                                            const a = document.createElement('a');
-                                            a.href = url;
-                                            a.download = `certificate_graph_${activeTab + 1}.json`;
-                                            document.body.appendChild(a);
-                                            a.click();
-                                            document.body.removeChild(a);
-                                            URL.revokeObjectURL(url);
-                                        }}
-                                    >
-                                        Download Certificate 📜
-                                    </button>
-                                </div>
+                                    );
+                                })}
+                            </div>
 
-                                <div className="result-content" style={{ padding: 0, border: 'none', background: 'transparent' }}>
-                                    <GraphViz
-                                        nodes={results[activeTab]?.data?.nodes || []}
-                                        edges={results[activeTab]?.data?.edges || []}
-                                    />
+                            <div className="input-card">
+                                <textarea
+                                    className="input-textarea"
+                                    value={inputs[activeTab]}
+                                    onChange={(e) => handleInputChange(activeTab, e.target.value)}
+                                    placeholder="Enter edges (e.g., '0 1\n1 2') or SMILES string..."
+                                />
+                                <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                                    {Object.keys(PRESETS).map((preset) => (
+                                        <button
+                                            key={preset}
+                                            className="btn-preset"
+                                            onClick={() => loadPreset(activeTab, preset as keyof typeof PRESETS)}
+                                        >
+                                            {preset}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
-                        ) : (
-                            <div className="result-content">
-                                <h3 style={{ color: 'var(--error)' }}>Error</h3>
-                                <p>{results[activeTab]?.message}</p>
+
+                            <div style={{ marginTop: 'auto', paddingTop: '20px' }}>
+                                <button
+                                    className="btn-primary"
+                                    style={{ width: '100%' }}
+                                    onClick={processBatch}
+                                    disabled={isProcessing}
+                                >
+                                    {isProcessing ? 'Processing...' : 'Analyze All Graphs'}
+                                </button>
                             </div>
-                        )
+                        </>
                     ) : (
-                        <div className="result-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-                            {isProcessing ? 'Processing...' : 'Enter a graph and click Analyze to see results'}
+                        <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', marginTop: '20px' }}>
+                            Switch to the right panel to chat with the Drug Discovery AI.
                         </div>
                     )}
                 </motion.div>
+
+                {mode === 'graph' ? (
+                    <motion.div
+                        className="right-panel"
+                        initial={{ opacity: 0, x: 50 }}
+                        whileInView={{ opacity: 1, x: 0 }}
+                        viewport={{ once: true }}
+                        transition={{ duration: 0.6, delay: 0.2 }}
+                    >
+                        {results[activeTab] ? (
+                            results[activeTab]?.status === 'success' ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                                        <div>
+                                            <span className={`status-badge ${results[activeTab]?.data?.is_planar ? 'status-planar' : 'status-non-planar'}`}>
+                                                {results[activeTab]?.data?.is_planar ? 'PLANAR' : 'NON-PLANAR'}
+                                            </span>
+                                            {!results[activeTab]?.data?.is_planar && (
+                                                <span style={{ marginLeft: '10px', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                                    (K5: {results[activeTab]?.data?.k5_count}, K3,3: {results[activeTab]?.data?.k33_count})
+                                                </span>
+                                            )}
+                                            <div style={{ fontSize: '0.8em', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                                                Time: {results[activeTab]?.data?.execution_time?.toFixed(4)}s | Source: {results[activeTab]?.data?.result_source || 'Unknown'}
+                                            </div>
+                                        </div>
+                                        <button
+                                            className="btn-secondary"
+                                            style={{ fontSize: '0.9rem', padding: '6px 12px' }}
+                                            onClick={() => {
+                                                const data = results[activeTab]?.data;
+                                                if (!data) return;
+                                                // @ts-ignore
+                                                const cert = data.certificate || { error: "Certificate not found" };
+                                                if (data.execution_time !== undefined) {
+                                                    // @ts-ignore
+                                                    cert.execution_time = data.execution_time;
+                                                    // @ts-ignore
+                                                    cert.execution_time_unit = "seconds";
+                                                }
+                                                if (data.result_source) {
+                                                    // @ts-ignore
+                                                    cert.result_source = data.result_source;
+                                                }
+                                                const blob = new Blob([JSON.stringify(cert, null, 2)], { type: 'application/json' });
+                                                const url = URL.createObjectURL(blob);
+                                                const a = document.createElement('a');
+                                                a.href = url;
+                                                a.download = `certificate_graph_${activeTab + 1}.json`;
+                                                document.body.appendChild(a);
+                                                a.click();
+                                                document.body.removeChild(a);
+                                                URL.revokeObjectURL(url);
+                                            }}
+                                        >
+                                            Download Certificate 📜
+                                        </button>
+                                    </div>
+
+                                    <div className="result-content" style={{ padding: 0, border: 'none', background: 'transparent' }}>
+                                        <GraphViz
+                                            nodes={results[activeTab]?.data?.nodes || []}
+                                            edges={results[activeTab]?.data?.edges || []}
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="result-content">
+                                    <h3 style={{ color: 'var(--error)' }}>Error</h3>
+                                    <p>{results[activeTab]?.message}</p>
+                                </div>
+                            )
+                        ) : (
+                            <div className="result-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+                                {isProcessing ? 'Processing...' : 'Enter a graph and click Analyze to see results'}
+                            </div>
+                        )}
+                    </motion.div>
+                ) : (
+                    <motion.div
+                        className="right-panel"
+                        initial={{ opacity: 0, x: 50 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.6 }}
+                        style={{ flex: 2 }} // Give more space to chat
+                    >
+                        <DrugDiscoveryChat />
+                    </motion.div>
+                )}
             </div>
-        </div>
+        </div >
     );
 };
 

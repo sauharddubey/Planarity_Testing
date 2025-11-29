@@ -3,6 +3,7 @@ import json
 from typing import Dict, Any, Optional, Union, List
 from concurrent.futures import Executor
 import asyncio
+from app.worker import process_graph_task
 
 # RDKit imports
 from rdkit import Chem
@@ -24,10 +25,21 @@ else:
 
 logger = logging.getLogger(__name__)
 
+
+
+def smiles_to_edge_list(mol) -> str:
+    """Converts an RDKit molecule to a string edge list (0-indexed)."""
+    edges = []
+    for bond in mol.GetBonds():
+        u = bond.GetBeginAtomIdx()
+        v = bond.GetEndAtomIdx()
+        edges.append(f"{u} {v}")
+    return "\n".join(edges)
+
 def analyze_molecule(smiles: str) -> Dict[str, Any]:
     """
     Analyzes a molecule given its SMILES string using RDKit.
-    This is a CPU-bound task suitable for ProcessPoolExecutor.
+    Also runs Planarity Testing on the molecular graph.
     """
     try:
         mol = Chem.MolFromSmiles(smiles)
@@ -49,17 +61,17 @@ def analyze_molecule(smiles: str) -> Dict[str, Any]:
         if hbd > 5: lipinski_violations += 1
         if hba > 10: lipinski_violations += 1
 
-        # Generate 3D coordinates
+        # Generate 3D coordinates (keep for potential future use or fallback)
         mol_3d = Chem.AddHs(mol)
         from rdkit.Chem import AllChem
         AllChem.EmbedMolecule(mol_3d, AllChem.ETKDG())
         
         # Extract atoms and bonds for 3D rendering
-        atoms = []
-        conf = mol_3d.GetConformer()
+        atoms_3d = []
+        conf_3d = mol_3d.GetConformer()
         for atom in mol_3d.GetAtoms():
-            pos = conf.GetAtomPosition(atom.GetIdx())
-            atoms.append({
+            pos = conf_3d.GetAtomPosition(atom.GetIdx())
+            atoms_3d.append({
                 "symbol": atom.GetSymbol(),
                 "x": pos.x,
                 "y": pos.y,
@@ -67,17 +79,56 @@ def analyze_molecule(smiles: str) -> Dict[str, Any]:
                 "color": get_atom_color(atom.GetSymbol())
             })
             
-        bonds = []
+        bonds_3d = []
         for bond in mol_3d.GetBonds():
             start_idx = bond.GetBeginAtomIdx()
             end_idx = bond.GetEndAtomIdx()
-            start_pos = conf.GetAtomPosition(start_idx)
-            end_pos = conf.GetAtomPosition(end_idx)
-            bonds.append({
+            start_pos = conf_3d.GetAtomPosition(start_idx)
+            end_pos = conf_3d.GetAtomPosition(end_idx)
+            bonds_3d.append({
                 "start": {"x": start_pos.x, "y": start_pos.y, "z": start_pos.z},
                 "end": {"x": end_pos.x, "y": end_pos.y, "z": end_pos.z},
                 "order": bond.GetBondTypeAsDouble()
             })
+
+        # --- Generate 2D Coordinates for D3 ---
+        mol_2d = Chem.Mol(mol) # Copy
+        AllChem.Compute2DCoords(mol_2d)
+        
+        atoms_2d = []
+        conf_2d = mol_2d.GetConformer()
+        for atom in mol_2d.GetAtoms():
+            pos = conf_2d.GetAtomPosition(atom.GetIdx())
+            atoms_2d.append({
+                "id": atom.GetIdx(),
+                "symbol": atom.GetSymbol(),
+                "x": pos.x, # RDKit 2D coords are usually small floats, frontend will scale
+                "y": pos.y,
+                "color": get_atom_color(atom.GetSymbol())
+            })
+
+        bonds_2d = []
+        for bond in mol_2d.GetBonds():
+            bonds_2d.append({
+                "source": bond.GetBeginAtomIdx(),
+                "target": bond.GetEndAtomIdx(),
+                "order": bond.GetBondTypeAsDouble()
+            })
+
+        # --- Planarity Check ---
+
+        # --- Planarity Check ---
+        edge_list_str = smiles_to_edge_list(mol)
+        # We run this synchronously here because we are already in a thread (run_in_executor)
+        # But process_graph_task is a regular function, so it's fine.
+        planarity_response = process_graph_task(edge_list_str)
+        
+        planarity_result = {}
+        if planarity_response.get("status") == "success":
+            planarity_result = planarity_response.get("data", {})
+        else:
+            logger.warning(f"Planarity check failed: {planarity_response.get('message')}")
+            planarity_result = {"is_planar": True, "error": "Check failed"} # Default to safe assumption or handle error
 
         return {
             "valid": True,
@@ -95,9 +146,14 @@ def analyze_molecule(smiles: str) -> Dict[str, Any]:
                 "passes": lipinski_violations <= 1
             },
             "structure_3d": {
-                "atoms": atoms,
-                "bonds": bonds
-            }
+                "atoms": atoms_3d,
+                "bonds": bonds_3d
+            },
+            "structure_2d": {
+                "nodes": atoms_2d,
+                "links": bonds_2d
+            },
+            "planarity": planarity_result
         }
     except Exception as e:
         logger.error(f"Error analyzing molecule: {e}")
@@ -137,6 +193,7 @@ async def generate_llm_response(analysis: Union[Optional[Dict[str, Any]], List[D
             "- If a molecule is analyzed, interpret its properties (MW, LogP, Lipinski rules) in the context of drug-likeness.\n"
             "- If multiple molecules are provided, COMPARE them. Highlight the best candidates based on drug-likeness and the user's query.\n"
             "- Highlight potential risks (e.g., toxicity, poor solubility) or benefits.\n"
+            "- **Topological Analysis**: The system also checks if the molecular graph is PLANAR. Mention this. If non-planar (contains K5 or K3,3 subgraphs), explain that this implies a complex, potentially caged or cross-linked structure.\n"
             "- If no molecule is provided, answer general chemistry questions or ask for a SMILES string.\n"
             "- Keep responses concise and actionable."
         )
@@ -156,7 +213,10 @@ async def generate_llm_response(analysis: Union[Optional[Dict[str, Any]], List[D
                             f"- MW: {props['molecular_weight']}, LogP: {props['logp']}, "
                             f"HBD: {props['hbd']}, HBA: {props['hba']}, TPSA: {props['tpsa']}\n"
                             f"- Lipinski: {'Pass' if lip['passes'] else 'Fail'} ({lip['violations']} violations)\n"
+                            f"- Planarity: {'Planar' if res['planarity']['is_planar'] else 'Non-Planar'}\n"
                         )
+                        if not res['planarity']['is_planar']:
+                            context += f"  - Kuratowski Subgraphs: K5={res['planarity'].get('k5_count', 0)}, K3,3={res['planarity'].get('k33_count', 0)}\n"
                     else:
                         context += f"\nMolecule {i+1} (SMILES: {res.get('smiles', 'Unknown')}): Invalid or Error ({res.get('error')})\n"
                 prompt_parts.append(f"Context:\n{context}\n\nUser Query: {user_query}")
@@ -172,7 +232,10 @@ async def generate_llm_response(analysis: Union[Optional[Dict[str, Any]], List[D
                     f"- H-Bond Acceptors: {props['hba']}\n"
                     f"- TPSA: {props['tpsa']}\n"
                     f"- Lipinski Rule of 5: {'Passes' if lip['passes'] else 'Fails'} ({lip['violations']} violations)\n"
+                    f"- Graph Topology: {'Planar' if analysis['planarity']['is_planar'] else 'Non-Planar'}\n"
                 )
+                if not analysis['planarity']['is_planar']:
+                    context += f"- Kuratowski Subgraphs: K5={analysis['planarity'].get('k5_count', 0)}, K3,3={analysis['planarity'].get('k33_count', 0)}\n"
                 prompt_parts.append(f"Context:\n{context}\n\nUser Query: {user_query}")
         else:
             prompt_parts.append(f"User Query: {user_query}")
