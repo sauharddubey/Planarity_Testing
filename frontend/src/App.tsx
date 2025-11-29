@@ -4,21 +4,24 @@ import Home from './pages/Home'
 import API from './pages/API'
 import Docs from './pages/Docs'
 import About from './pages/About'
+import StarBackground from './components/StarBackground'
 import './App.css'
 
 function App() {
   return (
     <Router>
       <div className="app-container">
+        <StarBackground />
+        <div className="glow-bg" />
         <Navbar />
-        <main className="main-content">
+        <div className="main-content">
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/api" element={<API />} />
             <Route path="/docs" element={<Docs />} />
             <Route path="/about" element={<About />} />
           </Routes>
-        </main>
+        </div>
       </div>
     </Router>
   )

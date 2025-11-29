@@ -1,276 +1,319 @@
-import { useState, useEffect } from 'react'
-import GraphViz from '../components/GraphViz'
-
-interface GraphData {
-    is_planar: boolean
-    nodes: Array<{ id: number | string; x: number; y: number; label: string }>
-    edges: Array<{ source: number | string; target: number | string; is_conflict: boolean }>
-}
+import React, { useState, useEffect, useRef } from 'react';
+import { motion } from 'framer-motion';
+import GraphViz from '../components/GraphViz';
 
 interface Result {
     status: 'success' | 'error'
-    data?: GraphData
+    data?: {
+        is_planar: boolean
+        nodes: Array<{ id: number | string; x: number; y: number; label: string }>
+        edges: Array<{ source: number | string; target: number | string; is_conflict: boolean }>
+        k5_count?: number
+        k33_count?: number
+    }
     message?: string
 }
 
+// Presets
 const PRESETS = {
-    K5: `0 1\n0 2\n0 3\n0 4\n1 2\n1 3\n1 4\n2 3\n2 4\n3 4`,
-    K3_3: `0 3\n0 4\n0 5\n1 3\n1 4\n1 5\n2 3\n2 4\n2 5`,
-    CAFFEINE: `CN1C=NC2=C1C(=O)N(C(=O)N2C)C`,
-    PLANAR: `0 1\n1 2\n2 3\n3 0\n0 2`
-}
+    "K5 (Non-Planar)": "0 1\n0 2\n0 3\n0 4\n1 2\n1 3\n1 4\n2 3\n2 4\n3 4",
+    "K3,3 (Non-Planar)": "0 3\n0 4\n0 5\n1 3\n1 4\n1 5\n2 3\n2 4\n2 5",
+    "Planar Example": "0 1\n1 2\n2 0\n0 3\n3 4",
+    "Caffeine (Planar)": "C1 N1\nC1 N2\nC1 O1\nN1 C2\nN1 C3\nC2 N3\nC2 O2\nN3 C4\nN3 C5\nC4 N2\nC4 N4\nN4 C1\nN4 C6\nC5 H1\nC5 H2\nC5 H3\nC3 H4\nC3 H5\nC3 H6\nC6 H7\nC6 H8\nC6 H9"
+};
 
-const Home = () => {
-    // State for list of inputs
-    const [inputs, setInputs] = useState<string[]>(['1 2\n2 3\n3 1'])
-    const [results, setResults] = useState<Result[]>([])
-    const [loading, setLoading] = useState<boolean>(false)
-    const [activeTab, setActiveTab] = useState<number>(0)
-    const [error, setError] = useState<string | null>(null)
+const Home: React.FC = () => {
+    const [inputs, setInputs] = useState<string[]>([""]);
+    const [results, setResults] = useState<(Result | null)[]>([]);
+    const [activeTab, setActiveTab] = useState(0);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const dashboardRef = useRef<HTMLDivElement>(null);
 
-    // Load results from localStorage on mount
+    // Load from localStorage on mount
     useEffect(() => {
-        const saved = localStorage.getItem('planarity_results')
-        if (saved) {
+        const savedInputs = localStorage.getItem('graphInputs');
+        if (savedInputs) {
+            setInputs(JSON.parse(savedInputs));
+        }
+        const savedResults = localStorage.getItem('graphResults');
+        if (savedResults) {
             try {
-                setResults(JSON.parse(saved))
+                setResults(JSON.parse(savedResults));
             } catch (e) {
-                console.error("Failed to parse saved results", e)
+                console.error("Failed to parse saved results", e);
+                setResults([]);
             }
         }
-    }, [])
+    }, []);
 
-    // Save results to localStorage when they change
+    // Save to localStorage
     useEffect(() => {
-        if (results.length > 0) {
-            localStorage.setItem('planarity_results', JSON.stringify(results))
-        }
-    }, [results])
+        localStorage.setItem('graphInputs', JSON.stringify(inputs));
+    }, [inputs]);
 
-    const handleAnalyze = async () => {
-        setLoading(true)
-        setError(null)
-        setResults([])
-        setActiveTab(0)
+    useEffect(() => {
+        localStorage.setItem('graphResults', JSON.stringify(results));
+    }, [results]);
+
+    const handleInputChange = (index: number, value: string) => {
+        const newInputs = [...inputs];
+        newInputs[index] = value;
+        setInputs(newInputs);
+    };
+
+    const addInputCard = () => {
+        setInputs([...inputs, ""]);
+        setResults([...results, null]);
+        setActiveTab(inputs.length);
+    };
+
+    const removeInputCard = (index: number, e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (inputs.length === 1) {
+            setInputs([""]);
+            setResults([null]);
+            setActiveTab(0);
+            return;
+        }
+        const newInputs = inputs.filter((_, i) => i !== index);
+        const newResults = results.filter((_, i) => i !== index);
+        setInputs(newInputs);
+        setResults(newResults);
+        if (activeTab >= newInputs.length) {
+            setActiveTab(newInputs.length - 1);
+        }
+    };
+
+    const loadPreset = (index: number, presetName: keyof typeof PRESETS) => {
+        handleInputChange(index, PRESETS[presetName]);
+    };
+
+    const processBatch = async () => {
+        setIsProcessing(true);
+        setResults(new Array(inputs.length).fill(null)); // Clear previous results
 
         try {
-            // Filter out empty inputs
-            const validInputs = inputs.map(s => s.trim()).filter(s => s.length > 0)
+            const validInputs = inputs.map(s => s.trim()).filter(s => s.length > 0);
 
             if (validInputs.length === 0) {
-                setError("Please enter at least one graph.")
-                setLoading(false)
-                return
+                setResults([]);
+                setIsProcessing(false);
+                return;
             }
 
-            // Initialize results array with placeholders
-            setResults(new Array(validInputs.length).fill(null))
-
-            const response = await fetch('http://localhost:8000/process-batch', {
+            const response = await fetch('http://127.0.0.1:8000/process-batch', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(validInputs),
-            })
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(validInputs)
+            });
 
             if (!response.body) {
-                throw new Error("ReadableStream not supported in this browser.")
+                throw new Error("ReadableStream not supported in this browser.");
             }
 
-            const reader = response.body.getReader()
-            const decoder = new TextDecoder()
-            let buffer = ''
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
             while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
+                const { done, value } = await reader.read();
+                if (done) break;
 
-                buffer += decoder.decode(value, { stream: true })
-                const lines = buffer.split('\n')
-
-                // Process all complete lines
-                buffer = lines.pop() || '' // Keep the last incomplete line in buffer
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
 
                 for (const line of lines) {
-                    if (line.trim()) {
-                        try {
-                            const { index, result } = JSON.parse(line)
-                            setResults(prev => {
-                                const next = [...prev]
-                                next[index] = result
-                                return next
-                            })
-                        } catch (e) {
-                            console.error("Error parsing stream line:", line, e)
-                        }
+                    if (!line.trim()) continue;
+                    try {
+                        const data = JSON.parse(line);
+                        setResults(prev => {
+                            const newRes = [...prev];
+                            newRes[data.index] = data.result;
+                            return newRes;
+                        });
+                    } catch (e) {
+                        console.error("Error parsing JSON:", e);
                     }
                 }
             }
-
-        } catch (err) {
-            console.error(err)
-            setError("Failed to fetch results. Ensure backend is running.")
+        } catch (error) {
+            console.error("Error processing batch:", error);
         } finally {
-            setLoading(false)
+            setIsProcessing(false);
         }
-    }
+    };
 
-    const addInput = () => {
-        setInputs([...inputs, ''])
-    }
-
-    const updateInput = (index: number, value: string) => {
-        const newInputs = [...inputs]
-        newInputs[index] = value
-        setInputs(newInputs)
-    }
-
-    const removeInput = (index: number) => {
-        const newInputs = inputs.filter((_, i) => i !== index)
-        setInputs(newInputs.length ? newInputs : ['']) // Keep at least one
-    }
-
-    const loadPreset = (preset: string) => {
-        // Add preset as a new input
-        setInputs([...inputs, preset])
-    }
+    const scrollToDashboard = () => {
+        dashboardRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
 
     return (
-        <div className="dashboard-container">
-            <div className="left-panel">
-                <h2>Input Batch</h2>
-                <p style={{ fontSize: '0.9em', color: '#aaa' }}>
-                    Add multiple graphs to analyze them in parallel.<br />
-                    Formats: Edge List ("1 2"), SMILES ("C-C-O"), Adjacency Matrix ("[[0,1],[1,0]]").
-                </p>
-
-                <div style={{ display: 'flex', gap: '5px', marginBottom: '15px', flexWrap: 'wrap' }}>
-                    <button className="btn-preset" onClick={() => loadPreset(PRESETS.PLANAR)}>+ Planar</button>
-                    <button className="btn-preset" onClick={() => loadPreset(PRESETS.K5)}>+ K5</button>
-                    <button className="btn-preset" onClick={() => loadPreset(PRESETS.K3_3)}>+ K3,3</button>
-                    <button className="btn-preset" onClick={() => loadPreset(PRESETS.CAFFEINE)}>+ Caffeine</button>
-                </div>
-
-                <div className="input-list" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '5px' }}>
-                    {inputs.map((inp, idx) => (
-                        <div key={idx} className="input-card">
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                                <span style={{ fontSize: '0.8em', color: '#888' }}>Graph {idx + 1}</span>
-                                <button
-                                    onClick={() => removeInput(idx)}
-                                    className="btn-remove"
-                                >
-                                    Remove
-                                </button>
-                            </div>
-                            <textarea
-                                value={inp}
-                                onChange={(e) => updateInput(idx, e.target.value)}
-                                placeholder="Enter graph data..."
-                                className="input-textarea"
-                            />
-                        </div>
-                    ))}
-                </div>
-
-                <div style={{ marginTop: '10px', display: 'flex', gap: '10px' }}>
-                    <button onClick={addInput} className="btn-secondary" style={{ flex: 1 }}>+ Add Graph</button>
-                    <button onClick={handleAnalyze} disabled={loading} className="btn-primary" style={{ flex: 2 }}>
-                        {loading ? 'Analyzing...' : 'Analyze Batch'}
+        <div className="page-container" style={{ maxWidth: '100%', padding: 0, overflow: 'hidden' }}>
+            {/* Hero Section */}
+            <section style={{
+                height: '90vh',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                textAlign: 'center',
+                padding: '0 20px'
+            }}>
+                <motion.div
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.8 }}
+                >
+                    <h1 style={{
+                        fontSize: '5rem',
+                        fontWeight: 800,
+                        marginBottom: '20px',
+                        lineHeight: 1.1,
+                        background: 'linear-gradient(135deg, #fff 0%, #94a3b8 100%)',
+                        WebkitBackgroundClip: 'text',
+                        WebkitTextFillColor: 'transparent'
+                    }}>
+                        Planarity Testing <br />
+                        <span style={{
+                            background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))',
+                            WebkitBackgroundClip: 'text',
+                            WebkitTextFillColor: 'transparent'
+                        }}>Reimagined</span>
+                    </h1>
+                    <p style={{
+                        fontSize: '1.2rem',
+                        color: 'var(--text-secondary)',
+                        maxWidth: '600px',
+                        margin: '0 auto 40px'
+                    }}>
+                        Advanced graph analysis powered by parallel processing and 3D visualization.
+                        Detect planarity, find Kuratowski subgraphs, and visualize chemical compounds instantly.
+                    </p>
+                    <button
+                        className="btn-connect"
+                        style={{ fontSize: '1.1rem', padding: '16px 40px' }}
+                        onClick={scrollToDashboard}
+                    >
+                        Start Analyzing
                     </button>
-                </div>
+                </motion.div>
+            </section>
 
-                {error && <div style={{ color: '#ff4444', marginTop: '10px' }}>{error}</div>}
-            </div>
+            {/* Dashboard Section */}
+            <div ref={dashboardRef} className="dashboard-container">
+                <motion.div
+                    className="left-panel"
+                    initial={{ opacity: 0, x: -50 }}
+                    whileInView={{ opacity: 1, x: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.6 }}
+                >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                        <h2 style={{ margin: 0 }}>Input Graphs</h2>
+                        <button className="btn-secondary" onClick={addInputCard} title="Add new graph">+</button>
+                    </div>
 
-            <div className="right-panel">
-                <h2>Results</h2>
-                {results.length > 0 ? (
-                    <>
-                        <div className="tabs">
-                            {results.map((res, idx) => {
-                                if (!res) {
-                                    // Loading state for this tab
-                                    let tabClass = 'tab'
-                                    if (idx === activeTab) tabClass += ' active'
-                                    return (
-                                        <div
-                                            key={idx}
-                                            className={tabClass}
-                                            onClick={() => setActiveTab(idx)}
-                                        >
-                                            Graph {idx + 1} ⏳
-                                        </div>
-                                    )
-                                }
+                    <div className="tabs">
+                        {inputs.map((_, idx) => {
+                            const result = results[idx];
+                            const isError = result?.status === 'error';
+                            const isPlanar = result?.status === 'success' && result?.data?.is_planar;
+                            // eslint-disable-next-line no-nested-ternary
+                            const tabClass = `tab ${activeTab === idx ? 'active' : ''} ${isError ? 'error' : (isPlanar ? 'planar' : (result ? 'non-planar' : ''))}`;
 
-                                const isPlanar = res.status === 'success' && res.data?.is_planar
-                                const isError = res.status === 'error'
-                                let tabClass = 'tab'
-                                if (idx === activeTab) tabClass += ' active'
-                                if (isError) tabClass += ' error'
-                                else if (isPlanar) tabClass += ' planar'
-                                else tabClass += ' non-planar'
-
-                                return (
-                                    <div
-                                        key={idx}
-                                        className={tabClass}
-                                        onClick={() => setActiveTab(idx)}
-                                    >
-                                        Graph {idx + 1} {isError ? '⚠️' : (isPlanar ? '✅' : '❌')}
-                                    </div>
-                                )
-                            })}
-                        </div>
-
-                        <div className="result-content">
-                            {results[activeTab] ? (
-                                <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                                    {results[activeTab].status === 'success' ? (
-                                        <>
-                                            <div className={`status-badge ${results[activeTab].data?.is_planar ? 'status-planar' : 'status-non-planar'}`}>
-                                                {results[activeTab].data?.is_planar ? 'PLANAR' : 'NON-PLANAR'}
-                                            </div>
-                                            <div style={{ marginBottom: '10px' }}>
-                                                <strong>Nodes:</strong> {results[activeTab].data?.nodes.length} |
-                                                <strong> Edges:</strong> {results[activeTab].data?.edges.length}
-                                            </div>
-
-                                            <div style={{ flex: 1, minHeight: 0, marginTop: '10px', position: 'relative' }}>
-                                                {results[activeTab].data && (
-                                                    <GraphViz
-                                                        nodes={results[activeTab].data.nodes}
-                                                        edges={results[activeTab].data.edges}
-                                                        width={800}
-                                                        height={600}
-                                                    />
-                                                )}
-                                            </div>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <div className="status-badge status-error">ERROR</div>
-                                            <p>{results[activeTab].message}</p>
-                                        </>
+                            return (
+                                <div
+                                    key={idx}
+                                    className={tabClass}
+                                    onClick={() => setActiveTab(idx)}
+                                >
+                                    Graph {idx + 1} {isError ? '⚠️' : (isPlanar ? '✅' : (result ? '❌' : ''))}
+                                    {inputs.length > 1 && (
+                                        <span className="btn-remove" style={{ marginLeft: '8px' }} onClick={(e) => removeInputCard(idx, e)}>×</span>
                                     )}
                                 </div>
-                            ) : (
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#aaa' }}>
-                                    Processing...
-                                </div>
-                            )}
-                        </div>
-                    </>
-                ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#666' }}>
-                        No results to display. Run analysis to see results.
+                            );
+                        })}
                     </div>
-                )}
+
+                    <div className="input-card">
+                        <textarea
+                            className="input-textarea"
+                            value={inputs[activeTab]}
+                            onChange={(e) => handleInputChange(activeTab, e.target.value)}
+                            placeholder="Enter edges (e.g., '0 1\n1 2') or SMILES string..."
+                        />
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                            {Object.keys(PRESETS).map((preset) => (
+                                <button
+                                    key={preset}
+                                    className="btn-preset"
+                                    onClick={() => loadPreset(activeTab, preset as keyof typeof PRESETS)}
+                                >
+                                    {preset}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div style={{ marginTop: 'auto', paddingTop: '20px' }}>
+                        <button
+                            className="btn-primary"
+                            style={{ width: '100%' }}
+                            onClick={processBatch}
+                            disabled={isProcessing}
+                        >
+                            {isProcessing ? 'Processing...' : 'Analyze All Graphs'}
+                        </button>
+                    </div>
+                </motion.div>
+
+                <motion.div
+                    className="right-panel"
+                    initial={{ opacity: 0, x: 50 }}
+                    whileInView={{ opacity: 1, x: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.6, delay: 0.2 }}
+                >
+                    {results[activeTab] ? (
+                        results[activeTab]?.status === 'success' ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                                    <div>
+                                        <span className={`status-badge ${results[activeTab]?.data?.is_planar ? 'status-planar' : 'status-non-planar'}`}>
+                                            {results[activeTab]?.data?.is_planar ? 'PLANAR' : 'NON-PLANAR'}
+                                        </span>
+                                        {!results[activeTab]?.data?.is_planar && (
+                                            <span style={{ marginLeft: '10px', color: 'var(--text-secondary)', fontSize: '0.9em' }}>
+                                                (K5: {results[activeTab]?.data?.k5_count}, K3,3: {results[activeTab]?.data?.k33_count})
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="result-content" style={{ padding: 0, border: 'none', background: 'transparent' }}>
+                                    <GraphViz
+                                        nodes={results[activeTab]?.data?.nodes || []}
+                                        edges={results[activeTab]?.data?.edges || []}
+                                    />
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="result-content">
+                                <h3 style={{ color: 'var(--error)' }}>Error</h3>
+                                <p>{results[activeTab]?.message}</p>
+                            </div>
+                        )
+                    ) : (
+                        <div className="result-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+                            {isProcessing ? 'Processing...' : 'Enter a graph and click Analyze to see results'}
+                        </div>
+                    )}
+                </motion.div>
             </div>
         </div>
-    )
-}
+    );
+};
 
-export default Home
+export default Home;
