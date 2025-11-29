@@ -1,152 +1,303 @@
-import { useEffect, useRef } from 'react'
-import * as d3 from 'd3'
+import React, { useEffect, useRef, useState } from 'react';
+import * as d3 from 'd3';
+import ForceGraph3D from 'react-force-graph-3d';
 
 interface Node {
     id: number | string
     x: number
     y: number
+    fx?: number | null
+    fy?: number | null
     label?: string
 }
 
-interface Edge {
-    source: number | string
-    target: number | string
+interface Link {
+    source: number | string | Node
+    target: number | string | Node
     is_conflict?: boolean
+    id?: string
 }
 
 interface GraphVizProps {
     nodes: Node[]
-    edges: Edge[]
+    edges: Link[]
     width?: number
     height?: number
 }
 
-const GraphViz = ({ nodes, edges, width = 800, height = 600 }: GraphVizProps) => {
-    const svgRef = useRef<SVGSVGElement>(null)
+// CPK Coloring for common elements
+const CPK_COLORS: Record<string, string> = {
+    'H': '#FFFFFF', // Hydrogen - White
+    'C': '#909090', // Carbon - Gray
+    'N': '#3050F8', // Nitrogen - Blue
+    'O': '#FF0D0D', // Oxygen - Red
+    'F': '#90E050', // Fluorine - Green
+    'Cl': '#1FF01F', // Chlorine - Green
+    'Br': '#A62929', // Bromine - Dark Red
+    'I': '#940094', // Iodine - Violet
+    'S': '#FFFF30', // Sulfur - Yellow
+    'P': '#FF8000', // Phosphorus - Orange
+};
 
+const GraphViz: React.FC<GraphVizProps> = ({ nodes: initialNodes, edges: initialEdges }) => {
+    const svgRef = useRef<SVGSVGElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [zoomLevel, setZoomLevel] = useState(1);
+    const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+
+    // Identify conflict edges
+    const conflictEdges = initialEdges.filter(e => e.is_conflict).map(e => {
+        // Create a unique ID for the edge if not present, or use source-target
+        // Note: The backend doesn't send edge IDs, so we rely on the is_conflict flag directly on the edge object.
+        // But for D3 join, we might need stable IDs.
+        return `${e.source}-${e.target}`;
+    });
+
+    const isPlanar = conflictEdges.length === 0;
+
+    // Update dimensions on mount and resize
     useEffect(() => {
-        if (!svgRef.current || nodes.length === 0) return
+        if (containerRef.current) {
+            setDimensions({
+                width: containerRef.current.clientWidth,
+                height: containerRef.current.clientHeight
+            });
+        }
+    }, []);
+
+    // --- 2D D3 Logic (Only for Non-Planar) ---
+    useEffect(() => {
+        if (isPlanar || !svgRef.current || !containerRef.current) return;
+
+        const width = containerRef.current.clientWidth;
+        const height = containerRef.current.clientHeight;
+
+        // Clear previous
+        d3.select(svgRef.current).selectAll("*").remove();
 
         const svg = d3.select(svgRef.current)
-        svg.selectAll("*").remove() // Clear previous render
+            .attr("viewBox", [0, 0, width, height]);
 
-        // Create a group for zooming/panning
-        const g = svg.append("g")
+        // Group for zoom
+        const g = svg.append("g");
 
-        // Setup Zoom
+        // Zoom behavior
         const zoom = d3.zoom<SVGSVGElement, unknown>()
             .scaleExtent([0.1, 10])
             .on("zoom", (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
-                g.attr("transform", event.transform.toString())
-            })
+                g.attr("transform", event.transform.toString());
+                setZoomLevel(event.transform.k);
+            });
 
-        svg.call(zoom)
+        svg.call(zoom);
 
-        // Calculate bounds
-        const xExtent = d3.extent(nodes, (d: Node) => d.x) as [number, number]
-        const yExtent = d3.extent(nodes, (d: Node) => d.y) as [number, number]
+        // Deep copy data for D3 mutation
+        const nodes: Node[] = initialNodes.map(d => ({
+            ...d,
+            // Use backend coordinates if available, otherwise random
+            x: d.x ?? Math.random() * width,
+            y: d.y ?? Math.random() * height
+        }));
 
-        const padding = 40
+        const links: Link[] = initialEdges.map(d => ({ ...d }));
 
-        // Create scales to map node coordinates to SVG dimensions
-        const minX = xExtent[0] || 0
-        const maxX = xExtent[1] || 0
-        const minY = yExtent[0] || 0
-        const maxY = yExtent[1] || 0
+        // Simulation Setup
+        const simulation = d3.forceSimulation(nodes)
+            .force("link", d3.forceLink(links).id((d: any) => d.id).distance(50))
+            .force("charge", d3.forceManyBody().strength(-100))
+            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("collide", d3.forceCollide().radius(15).iterations(2));
 
-        const domainWidth = maxX - minX || 1
-        const domainHeight = maxY - minY || 1
+        // Render Links
+        const link = g.append("g")
+            .selectAll("line")
+            .data(links)
+            .join("line")
+            .attr("stroke-width", (d) => d.is_conflict ? 3 : 1.5)
+            .attr("stroke", (d) => d.is_conflict ? "#ef4444" : "#64748b")
+            .attr("opacity", 0.6)
+            .attr("class", (d) => d.is_conflict ? "animate-pulse" : "");
 
-        const availableWidth = width - 2 * padding
-        const availableHeight = height - 2 * padding
-
-        const scaleFactor = Math.min(availableWidth / domainWidth, availableHeight / domainHeight)
-
-        // Center the graph
-        const domainCenterX = (minX + maxX) / 2
-        const domainCenterY = (minY + maxY) / 2
-
-        const rangeCenterX = width / 2
-        const rangeCenterY = height / 2
-
-        // Transform function: input -> scaled and centered output
-        const xScale = (x: number) => rangeCenterX + (x - domainCenterX) * scaleFactor
-        const yScale = (y: number) => rangeCenterY + (y - domainCenterY) * scaleFactor
-
-        // Draw Edges
-        // Sort edges so conflicts are on top
-        const sortedEdges = [...edges].sort((a, b) => (a.is_conflict === b.is_conflict) ? 0 : a.is_conflict ? 1 : -1)
-
-        g.selectAll("line")
-            .data(sortedEdges)
-            .enter()
-            .append("line")
-            .attr("x1", (d: Edge) => xScale(nodes.find(n => n.id === d.source)?.x || 0))
-            .attr("y1", (d: Edge) => yScale(nodes.find(n => n.id === d.source)?.y || 0))
-            .attr("x2", (d: Edge) => xScale(nodes.find(n => n.id === d.target)?.x || 0))
-            .attr("y2", (d: Edge) => yScale(nodes.find(n => n.id === d.target)?.y || 0))
-            .attr("stroke", (d: Edge) => d.is_conflict ? "#ff4444" : "#999")
-            .attr("stroke-width", (d: Edge) => d.is_conflict ? 3 : 1)
-            .attr("stroke-opacity", (d: Edge) => d.is_conflict ? 1 : 0.3)
-            .attr("class", (d: Edge) => d.is_conflict ? "edge-conflict" : "edge-normal")
-
-        // Draw Nodes
-        const nodeGroups = g.selectAll(".node")
+        // Render Nodes
+        const node = g.append("g")
+            .selectAll("circle")
             .data(nodes)
-            .enter()
-            .append("g")
-            .attr("class", "node")
-            .attr("transform", (d: Node) => `translate(${xScale(d.x)},${yScale(d.y)})`)
+            .join("circle")
+            .attr("r", 8)
+            .attr("fill", (d) => {
+                // Check if node is part of a conflict edge
+                const isBad = links.some(l =>
+                    l.is_conflict &&
+                    ((typeof l.source === 'object' ? (l.source as Node).id : l.source) === d.id ||
+                        (typeof l.target === 'object' ? (l.target as Node).id : l.target) === d.id)
+                );
 
-        // Node Circles
-        nodeGroups.append("circle")
-            .attr("r", 6)
-            .attr("fill", "#2b2b2b")
-            .attr("stroke", "#646cff")
+                if (isBad) return "#f87171"; // Light Red
+                return "#3b82f6"; // Blue
+            })
+            .attr("stroke", "#1e293b")
             .attr("stroke-width", 1.5)
-            .on("mouseover", function (this: SVGCircleElement) { d3.select(this).attr("fill", "#646cff"); })
-            .on("mouseout", function (this: SVGCircleElement) { d3.select(this).attr("fill", "#2b2b2b"); })
+            .call(d3.drag<SVGCircleElement, Node>()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended) as any);
 
-        // Node Labels
-        // Show labels if they exist (e.g. chemistry atoms) or if graph is small
-        nodeGroups.each(function (this: SVGGElement, d: Node) {
-            const el = d3.select(this);
-            if (d.label) {
-                el.append("text")
-                    .text(d.label)
-                    .attr("dy", ".35em")
-                    .attr("text-anchor", "middle")
-                    .attr("fill", "white")
-                    .style("font-size", "8px")
-                    .style("pointer-events", "none")
-                    .style("user-select", "none");
-            } else if (nodes.length < 50) {
-                el.append("text")
-                    .text(String(d.id))
-                    .attr("dy", ".35em")
-                    .attr("text-anchor", "middle")
-                    .attr("fill", "white")
-                    .style("font-size", "8px")
-                    .style("pointer-events", "none")
-                    .style("user-select", "none");
-            } else {
-                el.append("title").text(String(d.id));
-            }
-        });
+        // Render Labels
+        if (nodes.length < 100) {
+            const text = g.append("g")
+                .selectAll("text")
+                .data(nodes)
+                .join("text")
+                .text(d => d.label || String(d.id))
+                .attr("font-size", 10)
+                .attr("fill", "#cbd5e1")
+                .attr("dx", 10)
+                .attr("dy", 3)
+                .style("pointer-events", "none")
+                .style("user-select", "none");
 
-    }, [nodes, edges, width, height])
+            simulation.on("tick", () => {
+                link
+                    .attr("x1", (d: any) => d.source.x)
+                    .attr("y1", (d: any) => d.source.y)
+                    .attr("x2", (d: any) => d.target.x)
+                    .attr("y2", (d: any) => d.target.y);
 
+                node
+                    .attr("cx", (d: any) => d.x)
+                    .attr("cy", (d: any) => d.y);
+
+                text
+                    .attr("x", (d: any) => d.x)
+                    .attr("y", (d: any) => d.y);
+            });
+        } else {
+            simulation.on("tick", () => {
+                link
+                    .attr("x1", (d: any) => d.source.x)
+                    .attr("y1", (d: any) => d.source.y)
+                    .attr("x2", (d: any) => d.target.x)
+                    .attr("y2", (d: any) => d.target.y);
+
+                node
+                    .attr("cx", (d: any) => d.x)
+                    .attr("cy", (d: any) => d.y);
+            });
+        }
+
+        // Drag functions
+        function dragstarted(event: any, d: Node) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event: any, d: Node) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event: any, d: Node) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+
+        return () => {
+            simulation.stop();
+        };
+    }, [initialNodes, initialEdges, isPlanar, dimensions]);
+
+    // --- 3D Render for Planar Graphs ---
+    if (isPlanar) {
+        // Prepare data for ForceGraph3D
+        // Fix: Ensure fx/fy are undefined, not null, to satisfy ForceGraph3D types
+        const graphData = {
+            nodes: initialNodes.map(n => ({
+                ...n,
+                fx: n.fx ?? undefined,
+                fy: n.fy ?? undefined
+            })),
+            links: initialEdges.map(e => ({ ...e }))
+        };
+
+        return (
+            <div ref={containerRef} className="viz-container" style={{ background: '#000000' }}>
+                <ForceGraph3D
+                    graphData={graphData as any}
+                    width={dimensions.width}
+                    height={dimensions.height}
+                    backgroundColor="#000000"
+                    nodeLabel="label"
+                    nodeColor={(node: any) => {
+                        if (node.label && CPK_COLORS[node.label]) {
+                            return CPK_COLORS[node.label];
+                        }
+                        return "#10b981"; // Default Planar Green
+                    }}
+                    nodeRelSize={6}
+                    linkColor={() => "#64748b"}
+                    linkWidth={1.5}
+                    linkOpacity={0.6}
+                />
+
+                {/* 3D Overlay */}
+                <div className="viz-overlay-top-left">
+                    <div className="viz-stat-badge">
+                        3D Mode
+                    </div>
+                    <div className="viz-stat-badge">
+                        Nodes: {initialNodes.length}
+                    </div>
+                </div>
+
+                <div className="viz-overlay-bottom-right">
+                    <div className="legend-item">
+                        <span className="legend-dot bg-emerald"></span> Planar (3D)
+                    </div>
+                    <div className="legend-item">
+                        <span className="legend-dot" style={{ background: '#FF0D0D' }}></span> Oxygen
+                    </div>
+                    <div className="legend-item">
+                        <span className="legend-dot" style={{ background: '#3050F8' }}></span> Nitrogen
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // --- 2D Render for Non-Planar Graphs ---
     return (
-        <div style={{ width: '100%', height: '100%', border: '1px solid #444', borderRadius: '8px', overflow: 'hidden', background: '#111' }}>
-            <svg
-                ref={svgRef}
-                width="100%"
-                height="100%"
-                viewBox={`0 0 ${width} ${height}`}
-                style={{ cursor: 'grab' }}
-            />
-        </div>
-    )
-}
+        <div ref={containerRef} className="viz-container">
+            <svg ref={svgRef} className="cursor-move" style={{ width: '100%', height: '100%' }}></svg>
 
-export default GraphViz
+            {/* Stats Overlay */}
+            <div className="viz-overlay-top-left">
+                <div className="viz-stat-badge">
+                    2D Mode (Non-Planar)
+                </div>
+                <div className="viz-stat-badge">
+                    Nodes: {initialNodes.length}
+                </div>
+                <div className="viz-stat-badge">
+                    Edges: {initialEdges.length}
+                </div>
+                <div className="viz-stat-badge">
+                    Zoom: {zoomLevel.toFixed(1)}x
+                </div>
+            </div>
+
+            {/* Legend Overlay */}
+            <div className="viz-overlay-bottom-right">
+                <div className="legend-item">
+                    <span className="legend-dot bg-blue"></span> Node
+                </div>
+                <div className="legend-item">
+                    <span className="legend-dot bg-red animate-pulse"></span> Conflict (Kuratowski)
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default GraphViz;
