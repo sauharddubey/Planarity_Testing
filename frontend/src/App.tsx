@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 
 import './App.css'
+import GraphViz from './components/GraphViz'
 
 interface GraphData {
   is_planar: boolean
@@ -191,6 +192,21 @@ function App() {
           <>
             <div className="tabs">
               {results.map((res, idx) => {
+                if (!res) {
+                  // Loading state for this tab
+                  let tabClass = 'tab'
+                  if (idx === activeTab) tabClass += ' active'
+                  return (
+                    <div
+                      key={idx}
+                      className={tabClass}
+                      onClick={() => setActiveTab(idx)}
+                    >
+                      Graph {idx + 1} ⏳
+                    </div>
+                  )
+                }
+
                 const isPlanar = res.status === 'success' && res.data?.is_planar
                 const isError = res.status === 'error'
                 let tabClass = 'tab'
@@ -212,7 +228,7 @@ function App() {
             </div>
 
             <div className="result-content">
-              {results[activeTab] && (
+              {results[activeTab] ? (
                 <div>
                   {results[activeTab].status === 'success' ? (
                     <>
@@ -223,8 +239,17 @@ function App() {
                         <strong>Nodes:</strong> {results[activeTab].data?.nodes.length}<br />
                         <strong>Edges:</strong> {results[activeTab].data?.edges.length}
                       </div>
-                      <hr style={{ borderColor: '#444', margin: '10px 0' }} />
-                      <pre>{JSON.stringify(results[activeTab].data, null, 2)}</pre>
+
+                      <div style={{ flex: 1, minHeight: 0, marginTop: '10px' }}>
+                        {results[activeTab].data && (
+                          <GraphViz
+                            nodes={results[activeTab].data.nodes}
+                            edges={results[activeTab].data.edges}
+                            width={800}
+                            height={600}
+                          />
+                        )}
+                      </div>
                     </>
                   ) : (
                     <>
@@ -232,6 +257,10 @@ function App() {
                       <p>{results[activeTab].message}</p>
                     </>
                   )}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#aaa' }}>
+                  Processing...
                 </div>
               )}
             </div>

@@ -43,89 +43,70 @@ def read_root():
 from fastapi.responses import StreamingResponse
 import json
 
+# Define a wrapper to keep track of index and input for process_graph_task
+def process_graph_task_with_index(index, inp):
+    res = process_graph_task(inp)
+    return index, inp, res
+
 @app.post("/process-batch")
 async def process_batch(inputs: List[str] = Body(...)):
     """
     Process a batch of graph strings.
     Streams results as NDJSON (Newline Delimited JSON).
     """
-    async def process_generator():
-        # 1. Identify Cache Hits vs Misses
-        misses_indices = []
-        misses_inputs = []
-        
-        # We need to yield results in order or out of order?
-        # The prompt implies "as soon as graphs are ready", so out-of-order is fine/better for responsiveness.
-        # But the frontend assumes index matching?
-        # Let's yield objects with "index" to allow frontend to place them correctly.
-        
-        # First, yield cache hits immediately
-        for i, inp in enumerate(inputs):
-            h = hashlib.sha256(inp.encode("utf-8")).hexdigest()
-            if h in RESULT_CACHE:
-                yield json.dumps({"index": i, "result": RESULT_CACHE[h]}) + "\n"
-            else:
-                misses_indices.append(i)
-                misses_inputs.append(inp)
-
-        # 2. Process Misses in Parallel
-        if misses_inputs:
-            loop = asyncio.get_running_loop()
-            tasks = []
-            
-            # Create tasks mapping to their original index
-            for i, inp in zip(misses_indices, misses_inputs):
-                # We wrap the executor call to include the index in the return
-                task = loop.run_in_executor(executor, process_graph_task, inp)
-                tasks.append((i, inp, task))
-            
-            # Wait for tasks as they complete
-            pending = [t[2] for t in tasks]
-            task_map = {t[2]: (t[0], t[1]) for t in tasks} # task -> (index, input)
-            
-            for completed_task in asyncio.as_completed(pending):
-                result = await completed_task
-                
-                # Find which index this result belongs to
-                # asyncio.as_completed yields futures, we need to match them? 
-                # Actually as_completed yields a new future that resolves to the result.
-                # It doesn't give us the original future object easily to map back.
-                
-                # Better approach: Wrap the task function itself to return index
-                pass 
-
-    # Refined Generator Approach
     async def result_generator():
+        # Use a set to track hashes of inputs already processed or in cache
+        processed_hashes = set()
+        
         # 1. Cache Hits
         misses = []
         for i, inp in enumerate(inputs):
             h = hashlib.sha256(inp.encode("utf-8")).hexdigest()
+            
             if h in RESULT_CACHE:
-                yield json.dumps({"index": i, "result": RESULT_CACHE[h]}) + "\n"
+                if h not in processed_hashes: # Avoid yielding duplicates if same input appears multiple times
+                    yield json.dumps({"index": i, "result": RESULT_CACHE[h]}) + "\n"
+                    processed_hashes.add(h)
             else:
-                misses.append((i, inp))
+                misses.append((i, inp, h)) # Store index, input, and its hash for misses
         
-        # 2. Cache Misses
+        # 2. Process Cache Misses
         if misses:
             loop = asyncio.get_running_loop()
             
-            # Define a wrapper to keep track of index
-            def run_task_with_index(index, inp):
-                res = process_graph_task(inp)
-                return index, inp, res
-
-            tasks = [
-                loop.run_in_executor(executor, run_task_with_index, i, inp)
-                for i, inp in misses
-            ]
+            tasks = []
+            # Filter out duplicate misses based on hash before creating tasks
+            unique_misses_map = {} # hash -> (index, inp)
+            for i, inp, h in misses:
+                if h not in unique_misses_map:
+                    unique_misses_map[h] = (i, inp)
+                # If a hash is already in unique_misses_map, it means we've seen this input before.
+                # We still need to process it for the original index, but we only need one worker task per unique input.
             
+            # Create tasks for unique inputs
+            for h, (original_index, unique_inp) in unique_misses_map.items():
+                tasks.append(
+                    loop.run_in_executor(executor, process_graph_task_with_index, original_index, unique_inp)
+                )
+            
+            # Map hashes back to all original indices that requested them
+            hash_to_indices = {}
+            for i, inp, h in misses:
+                hash_to_indices.setdefault(h, []).append(i)
+
             for coro in asyncio.as_completed(tasks):
-                index, inp, res = await coro
+                # The result from process_graph_task_with_index is (original_index, inp, res)
+                # We use the 'inp' from the result to re-calculate the hash, ensuring consistency
+                # and allowing us to look up all indices that requested this specific input.
+                _, inp_from_worker, res = await coro
                 
                 # Update Cache
-                h = hashlib.sha256(inp.encode("utf-8")).hexdigest()
+                h = hashlib.sha256(inp_from_worker.encode("utf-8")).hexdigest()
                 RESULT_CACHE[h] = res
                 
-                yield json.dumps({"index": index, "result": res}) + "\n"
+                # Yield result for all indices that requested this input
+                if h in hash_to_indices:
+                    for idx in hash_to_indices[h]:
+                        yield json.dumps({"index": idx, "result": res}) + "\n"
 
     return StreamingResponse(result_generator(), media_type="application/x-ndjson")
